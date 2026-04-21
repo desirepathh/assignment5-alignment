@@ -82,7 +82,25 @@ def run_compute_group_normalized_rewards(
 
 def run_compute_entropy(logits: torch.Tensor) -> torch.Tensor:
     """Get the entropy of the logits (i.e., entropy of the final dimension)."""
-    raise NotImplementedError
+    # 步骤 1: 计算对数概率
+    # logits 是模型输出的原始分数（未归一化），shape.logits=[Batch,Sequence,Prosibility]
+    # log_softmax = log(softmax(logits))，数值更稳定
+    log_probs=torch.log_softmax(logits,dim=-1)
+    #                    ↑ 将 logits 转为概率分布再取 log
+    #                                        ↑ 沿最后一个维度（vocab）计算
+    # 步骤 2: 还原回概率
+    # p = exp(log_p) 反向操作得到实际概率
+
+    # 步骤 3: 计算熵
+    # 熵公式：H = -Σ p(x) × log(p(x))
+    # 对每个token位置的词汇分布计算熵
+    probs=torch.exp(log_probs)
+    entropy=-(probs*log_probs).sum(dim=-1)
+    #          ↑ p(x) × log(p(x))  ↑ 求和得到熵值,按最后一列加，每个token计算一个熵值
+    #      ↑ 负号（因为log_p是负数）
+    #shape.entropy=[B,S]
+    return entropy
+
 
 
 def run_get_response_log_probs(
