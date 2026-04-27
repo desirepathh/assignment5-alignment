@@ -211,6 +211,27 @@ def run_masked_mean(tensor: torch.Tensor, mask: torch.Tensor, dim: int | None = 
         torch.Tensor, the mean of the tensor along the specified
             dimension, considering only the elements with mask value 1.
     """
+    # ============================================================
+    # 原理：带掩码的均值计算
+    # ============================================================
+    # 在 SFT/GRPO 中，一个 batch 的序列长度各不相同，短序列会被 padding。
+    # 我们只想对"有效 token"（mask=1）计算均值，忽略 padding（mask=0）。
+    #
+    # 数学公式：
+    #   masked_mean(x, mask, dim) = sum(x * mask, dim) / sum(mask, dim)
+    #
+    # 例如 dim=1，shape=[B, S]：
+    #   对每行，只对 mask=1 的位置求和，再除以该行 mask=1 的个数。
+    #   结果 shape=[B]
+    #
+    # 实现提示：
+    #   1. tensor 和 mask 形状相同，先把 mask 转为 float
+    #   2. 用 (tensor * mask_float).sum(dim=dim) 得到有效元素之和
+    #   3. 用 mask_float.sum(dim=dim) 得到有效元素个数
+    #   4. 相除得到均值（注意避免除以 0，可以加 clamp(min=1e-8)）
+    #   5. dim=None 时，等价于对整个 tensor 做 sum / count
+    # ============================================================
+    mask=mask.float()
     raise NotImplementedError
 
 def run_sft_microbatch_train_step(
