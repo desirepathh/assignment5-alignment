@@ -1,0 +1,2 @@
+stage,accuracy,format_rate,answer_rate,correct,wrong_answer,wrong_format,total
+baseline,0.0898,0.3076,0.0898,449,1089,3462,5000
