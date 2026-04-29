@@ -989,7 +989,8 @@ def extract_answer(passage: str) -> str:
     return None
 
 
-def grade(model_answer: str, gt_answer: str, fast: bool = True):
+def grade(model_answer: str, gt_answer, fast: bool = True):
+    gt_answer = str(gt_answer)
     if "\\boxed" in gt_answer:
         gt_answer = extract_answer(gt_answer)
     correct = grade_answer_mathd(model_answer, gt_answer) or grade_answer_sympy(
