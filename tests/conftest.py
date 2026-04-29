@@ -210,7 +210,7 @@ def output_strs():
 
 @pytest.fixture
 def model_id():
-    return "/data/a5-alignment/models/Qwen2.5-Math-1.5B"
+    return "E:/HuggingFaceCache/hub/models--Qwen--Qwen2.5-Math-1.5B/snapshots/4a83ca6e4526a4f2da3aa259ec36c259f66b2ab2"
 
 
 @pytest.fixture
@@ -220,7 +220,7 @@ def tokenizer(model_id):
 
 @pytest.fixture
 def model(model_id):
-    return AutoModelForCausalLM.from_pretrained(model_id)
+    return AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
 
 
 @pytest.fixture
