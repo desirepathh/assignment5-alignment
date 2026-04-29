@@ -28,23 +28,12 @@ def load_prompt_template(template_path: str) -> str:
 
 
 def load_math_dataset(data_path: str) -> List[dict]:
-    """加载 MATH 数据集"""
-    samples = []
+    """加载 MATH 数据集，支持 JSON 数组和 JSONL 两种格式。"""
     with xopen(data_path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                # 支持 [ {...} ] 格式
-                if line.startswith('['):
-                    continue
-                if line.endswith(']'):
-                    continue
-                # 去掉末尾逗号
-                if line.endswith(','):
-                    line = line[:-1]
-                if line:
-                    samples.append(json.loads(line))
-    return samples
+        content = f.read().strip()
+    if content.startswith("["):
+        return json.loads(content)
+    return [json.loads(line) for line in content.split("\n") if line.strip()]
 
 
 def format_prompts(samples: List[dict], template: str) -> List[str]:
