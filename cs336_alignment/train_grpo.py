@@ -3,7 +3,7 @@
 Usage:
     python train_grpo.py \
         --model_name output/sft/final \
-        --data_path data/train.jsonl \
+        --data_path data/sft-reason/train.jsonl \
         --output_dir output/grpo \
         --n_iterations 200 \
         --n_prompts_per_rollout 16 \
@@ -30,6 +30,7 @@ from tests.adapters import (
     run_tokenize_prompt_and_output,
 )
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
+from cs336_alignment.plot_utils import MetricsLogger, plot_grpo_curves
 
 R1_ZERO_PROMPT = """A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. The reasoning process is enclosed within <thinkPubMed> </thinkPubMed> and answer is enclosed within <answer> </answer> tags, respectively, i.e., <thinkPubMed> reasoning process here </thinkPubMed> <answer> answer here </answer>.
 User: {question}
@@ -147,6 +148,7 @@ def main():
 
     # optimizer
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    logger = MetricsLogger(os.path.join(args.output_dir, "training_log.jsonl"))
 
     for iteration in range(args.n_iterations):
         print(f"\n=== Iteration {iteration + 1}/{args.n_iterations} ===")
@@ -180,7 +182,16 @@ def main():
         )
 
         mean_reward = raw_rewards.mean().item()
-        print(f"Mean reward: {mean_reward:.4f} | Std: {raw_rewards.std().item():.4f}")
+        std_reward = raw_rewards.std().item()
+        mean_advantage = advantages.mean().item()
+
+        # reward 组件拆分
+        reward_details = [r1_zero_reward_fn(r, gt) for r, gt in zip(rollout_responses, repeated_ground_truths)]
+        mean_format_reward = sum(d["format_reward"] for d in reward_details) / len(reward_details)
+        mean_answer_reward = sum(d["answer_reward"] for d in reward_details) / len(reward_details)
+
+        print(f"Mean reward: {mean_reward:.4f} | Std: {std_reward:.4f} | "
+              f"Format: {mean_format_reward:.2%} | Answer: {mean_answer_reward:.2%}")
 
         # 4. 计算 old_log_probs
         model.eval()
@@ -232,14 +243,26 @@ def main():
                     cliprange=args.cliprange,
                 )
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             optimizer.zero_grad()
 
         # logging
         if (iteration + 1) % args.log_every == 0:
             clip_frac = metadata.get("clip_fraction", 0)
-            print(f"Loss: {loss.item():.4f} | Clip frac: {clip_frac:.4f}")
+            loss_val = loss.item()
+            print(f"Loss: {loss_val:.4f} | Clip frac: {clip_frac:.4f}")
+            logger.log({
+                "iteration": iteration + 1,
+                "loss": loss_val,
+                "mean_reward": mean_reward,
+                "std_reward": std_reward,
+                "mean_advantage": mean_advantage,
+                "mean_format_reward": mean_format_reward,
+                "mean_answer_reward": mean_answer_reward,
+                "clip_fraction": clip_frac,
+                "grad_norm": grad_norm.item(),
+            })
 
         # save checkpoint
         if (iteration + 1) % args.save_every == 0:
@@ -253,6 +276,9 @@ def main():
     model.save_pretrained(save_path)
     tokenizer.save_pretrained(save_path)
     print(f"Saved final model to {save_path}")
+
+    logger.close()
+    plot_grpo_curves(os.path.join(args.output_dir, "training_log.jsonl"), args.output_dir)
 
 
 if __name__ == "__main__":

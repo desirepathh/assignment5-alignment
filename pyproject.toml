@@ -9,6 +9,7 @@ dependencies = [
     "alpaca-eval",
     "flash-attn==2.7.4.post1",
     "jupyter>=1.1.1",
+    "matplotlib>=3.8.0",
     "math-verify[antlr4-13-2]>=0.7.0",
     "pylatexenc==2.10",
     "notebook>=7.4.2",

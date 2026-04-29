@@ -3,7 +3,7 @@
 Usage:
     python train_sft.py \
         --model_name Qwen/Qwen2.5-Math-1.5B \
-        --data_path data/sft_gpt-oss-120b_filtered.jsonl \
+        --data_path data/sft-reason/sft_gpt-oss-120b_filtered.jsonl \
         --output_dir output/sft \
         --epochs 3 \
         --lr 5e-5 \
@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -22,8 +23,8 @@ from torch.optim import AdamW
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, get_cosine_schedule_with_warmup
 
-# 添加项目路径
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from cs336_alignment.plot_utils import MetricsLogger, plot_sft_curves
 from tests.adapters import run_get_response_log_probs, run_sft_microbatch_train_step, run_tokenize_prompt_and_output
 
 R1_ZERO_PROMPT = """A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. The reasoning process is enclosed within <thinkPubMed> </thinkPubMed> and answer is enclosed within <answer> </answer> tags, respectively, i.e., <thinkPubMed> reasoning process here </thinkPubMed> <answer> answer here </answer>.
@@ -130,6 +131,7 @@ def main():
 
     global_step = 0
     running_loss = 0.0
+    logger = MetricsLogger(os.path.join(args.output_dir, "training_log.jsonl"))
 
     for epoch in range(args.epochs):
         # shuffle
@@ -165,16 +167,28 @@ def main():
 
             # gradient accumulation: 每 N 步更新一次
             if global_step % args.gradient_accumulation_steps == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
+            else:
+                grad_norm = None
 
             # logging
             if global_step % args.log_every == 0:
                 avg_loss = running_loss / args.log_every
                 lr = scheduler.get_last_lr()[0]
                 print(f"Step {global_step} | Loss: {avg_loss:.4f} | LR: {lr:.2e}")
+                log_entry = {
+                    "step": global_step,
+                    "loss": avg_loss,
+                    "perplexity": math.exp(min(avg_loss, 20)),
+                    "lr": lr,
+                    "epoch": epoch + 1,
+                }
+                if grad_norm is not None:
+                    log_entry["grad_norm"] = grad_norm.item()
+                logger.log(log_entry)
                 running_loss = 0.0
 
             # save checkpoint
@@ -189,6 +203,9 @@ def main():
     model.save_pretrained(save_path)
     tokenizer.save_pretrained(save_path)
     print(f"Saved final model to {save_path}")
+
+    logger.close()
+    plot_sft_curves(os.path.join(args.output_dir, "training_log.jsonl"), args.output_dir)
 
 
 if __name__ == "__main__":
