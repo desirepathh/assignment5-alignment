@@ -208,6 +208,8 @@ def main():
                 result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=False)
             all_old_log_probs.append(result["log_probs"].cpu())
 
+        max_len = max(t.size(1) for t in all_old_log_probs)
+        all_old_log_probs = [torch.nn.functional.pad(t, (0, max_len - t.size(1))) for t in all_old_log_probs]
         old_log_probs = torch.cat(all_old_log_probs, dim=0)
         model.train()
 
