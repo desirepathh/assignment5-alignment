@@ -107,6 +107,7 @@ def generate_rollouts(model, tokenizer, prompts, group_size, max_length,
                       temperature, top_p, device):
     """Generate rollouts using batched HF model.generate()."""
     model.eval()
+    tokenizer.padding_side = "left"
     all_prompts = []
     all_responses = []
     with torch.no_grad():
