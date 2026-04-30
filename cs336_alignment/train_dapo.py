@@ -52,7 +52,7 @@ def parse_args():
     parser.add_argument("--n_prompts_per_rollout", type=int, default=8)
     parser.add_argument("--group_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=5e-6)
-    parser.add_argument("--microbatch_size", type=int, default=4)
+    parser.add_argument("--microbatch_size", type=int, default=2)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
     parser.add_argument("--max_response_length", type=int, default=512)
     parser.add_argument("--generation_temperature", type=float, default=1.0,
