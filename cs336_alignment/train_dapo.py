@@ -103,30 +103,16 @@ def setup_lora(model, lora_rank, lora_alpha):
     return model
 
 
-def generate_rollouts_vllm(model, tokenizer, prompts, group_size, max_length,
-                           temperature, top_p, temp_dir):
-    """vLLM batch generation. Saves LoRA, merges for vLLM, then generates."""
+def generate_rollouts_vllm(vllm_path, prompts, group_size, max_length,
+                           temperature, top_p):
+    """vLLM batch generation. Call after GPU memory is fully freed."""
     from vllm import LLM, SamplingParams
 
-    # 1. Save current LoRA adapter
-    adapter_path = os.path.join(temp_dir, "adapter")
-    model.save_pretrained(adapter_path)
-
-    # 2. Merge LoRA into base model for vLLM
-    merged = model.merge_and_unload()
-    vllm_path = os.path.join(temp_dir, "vllm_model")
-    merged.save_pretrained(vllm_path)
-    tokenizer.save_pretrained(vllm_path)
-    del merged, model
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    # 3. vLLM generate (enforce_eager=True to avoid CUDA graph OOM)
     llm = LLM(
         model=vllm_path,
         tensor_parallel_size=1,
         trust_remote_code=True,
-        gpu_memory_utilization=0.5,
+        gpu_memory_utilization=0.9,
         enforce_eager=True,
     )
     sampling_params = SamplingParams(
@@ -143,12 +129,11 @@ def generate_rollouts_vllm(model, tokenizer, prompts, group_size, max_length,
             all_prompts.append(prompt)
             all_responses.append(resp.text)
 
-    # 4. Free vLLM
     del llm
     gc.collect()
     torch.cuda.empty_cache()
 
-    return all_prompts, all_responses, adapter_path
+    return all_prompts, all_responses
 
 
 def reload_training_model(base_model_path, adapter_path, use_lora, lora_rank, lora_alpha):
@@ -273,13 +258,23 @@ def main():
         ground_truths = [str(p["expected_answer"]) for p in sampled_problems]
 
         # 2. Generate rollouts with vLLM
-        #    Save optimizer state, then swap model to vLLM for generation
+        #    Save state → merge → free GPU → vLLM generate → reload
+        adapter_path = os.path.join(temp_dir, "adapter")
+        model.save_pretrained(adapter_path)
         torch.save(optimizer.state_dict(), opt_path)
 
-        rollout_prompts, rollout_responses, adapter_path = generate_rollouts_vllm(
-            model, tokenizer, prompts_text, args.group_size,
+        merged = model.merge_and_unload()
+        vllm_path = os.path.join(temp_dir, "vllm_model")
+        merged.save_pretrained(vllm_path)
+        tokenizer.save_pretrained(vllm_path)
+        del model, optimizer, merged
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        rollout_prompts, rollout_responses = generate_rollouts_vllm(
+            vllm_path, prompts_text, args.group_size,
             args.max_response_length, args.generation_temperature,
-            args.generation_top_p, temp_dir,
+            args.generation_top_p,
         )
 
         # Reload training model + optimizer
