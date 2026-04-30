@@ -94,29 +94,30 @@ def setup_lora(model, lora_rank, lora_alpha):
 
 
 def generate_rollouts(model, tokenizer, prompts, group_size, max_length, temperature, top_p, device):
-    """为每个 prompt 生成 group_size 个回复。"""
+    """为每个 prompt 生成 group_size 个回复（批量生成）。"""
     model.eval()
+    tokenizer.padding_side = "left"
     all_prompts = []
     all_responses = []
-    for prompt in prompts:
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=max_length,
-                temperature=temperature,
-                top_p=top_p,
-                do_sample=True,
-                num_return_sequences=group_size,
-                pad_token_id=tokenizer.pad_token_id,
-            )
-        # 去掉 prompt 部分，只保留生成的回复
-        prompt_len = inputs["input_ids"].shape[1]
-        for j in range(group_size):
-            generated_ids = outputs[j, prompt_len:]
-            response = tokenizer.decode(generated_ids, skip_special_tokens=True)
-            all_prompts.append(prompt)
-            all_responses.append(response)
+    with torch.no_grad():
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_length,
+            temperature=temperature,
+            top_p=top_p,
+            do_sample=True,
+            num_return_sequences=group_size,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        prompt_lens = inputs["attention_mask"].sum(dim=1).tolist()
+        for i, prompt in enumerate(prompts):
+            for j in range(group_size):
+                idx = i * group_size + j
+                generated_ids = outputs[idx, prompt_lens[i]:]
+                response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+                all_prompts.append(prompt)
+                all_responses.append(response)
     model.train()
     return all_prompts, all_responses
 
