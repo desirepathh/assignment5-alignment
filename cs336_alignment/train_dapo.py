@@ -24,6 +24,7 @@ import argparse
 import gc
 import json
 import os
+import subprocess
 import sys
 
 import torch
@@ -104,35 +105,37 @@ def setup_lora(model, lora_rank, lora_alpha):
 
 
 def generate_rollouts_vllm(vllm_path, prompts, group_size, max_length,
-                           temperature, top_p):
-    """vLLM batch generation. Call after GPU memory is fully freed."""
-    from vllm import LLM, SamplingParams
+                           temperature, top_p, temp_dir):
+    """Run vLLM in a subprocess to guarantee GPU memory is freed after generation."""
+    prompts_file = os.path.join(temp_dir, "prompts.json")
+    results_file = os.path.join(temp_dir, "results.json")
+    with open(prompts_file, "w") as f:
+        json.dump(prompts, f)
 
-    llm = LLM(
-        model=vllm_path,
-        tensor_parallel_size=1,
-        trust_remote_code=True,
-        gpu_memory_utilization=0.9,
-        enforce_eager=True,
+    script = (
+        "import json\n"
+        "from vllm import LLM, SamplingParams\n"
+        f'with open("{prompts_file}") as f:\n'
+        "    prompts = json.load(f)\n"
+        f'llm = LLM(model="{vllm_path}", tensor_parallel_size=1,'
+        ' trust_remote_code=True, gpu_memory_utilization=0.9, enforce_eager=True)\n'
+        f'sp = SamplingParams(temperature={temperature}, top_p={top_p},'
+        f' max_tokens={max_length}, n={group_size})\n'
+        "outputs = llm.generate(prompts, sp)\n"
+        "results = []\n"
+        "for prompt, output in zip(prompts, outputs):\n"
+        "    for resp in output.outputs:\n"
+        '        results.append({"prompt": prompt, "response": resp.text})\n'
+        f'with open("{results_file}", "w") as f:\n'
+        "    json.dump(results, f)\n"
     )
-    sampling_params = SamplingParams(
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_length,
-        n=group_size,
-    )
-    outputs = llm.generate(prompts, sampling_params)
+    subprocess.run([sys.executable, "-c", script], check=True)
 
-    all_prompts, all_responses = [], []
-    for prompt, output in zip(prompts, outputs):
-        for resp in output.outputs:
-            all_prompts.append(prompt)
-            all_responses.append(resp.text)
+    with open(results_file) as f:
+        results = json.load(f)
 
-    del llm
-    gc.collect()
-    torch.cuda.empty_cache()
-
+    all_prompts = [r["prompt"] for r in results]
+    all_responses = [r["response"] for r in results]
     return all_prompts, all_responses
 
 
@@ -274,7 +277,7 @@ def main():
         rollout_prompts, rollout_responses = generate_rollouts_vllm(
             vllm_path, prompts_text, args.group_size,
             args.max_response_length, args.generation_temperature,
-            args.generation_top_p,
+            args.generation_top_p, temp_dir,
         )
 
         # Reload training model + optimizer
