@@ -224,7 +224,7 @@ def plot_comparison(all_metrics: dict[str, dict], output_dir: str):
 
     ax2.bar(labels, correct, label="Correct", color="#55A868")
     ax2.bar(labels, wrong_answer, bottom=correct, label="Format OK, Wrong Answer", color="#DDAA33")
-    ax2.bar(labels, wrong_answer, bottom=[c + w for c, w in zip(correct, wrong_answer)],
+    ax2.bar(labels, wrong_format, bottom=[c + w for c, w in zip(correct, wrong_answer)],
             label="Wrong Format", color="#C44E52")
 
     for i, s in enumerate(stages):
