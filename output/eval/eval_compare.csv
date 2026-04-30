@@ -1,2 +1,5 @@
 stage,accuracy,format_rate,answer_rate,correct,wrong_answer,wrong_format,total
 baseline,0.0898,0.3076,0.0898,449,1089,3462,5000
+sft,0.4784,0.9916,0.4784,2392,2566,42,5000
+grpo,0.4994,0.9918,0.4994,2497,2462,41,5000
+dapo,0.5412,0.9888,0.5412,2706,2238,56,5000
