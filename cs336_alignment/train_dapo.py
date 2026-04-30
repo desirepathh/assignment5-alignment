@@ -117,16 +117,17 @@ def generate_rollouts_vllm(model, tokenizer, prompts, group_size, max_length,
     vllm_path = os.path.join(temp_dir, "vllm_model")
     merged.save_pretrained(vllm_path)
     tokenizer.save_pretrained(vllm_path)
-    del merged
+    del merged, model
     gc.collect()
     torch.cuda.empty_cache()
 
-    # 3. vLLM generate
+    # 3. vLLM generate (enforce_eager=True to avoid CUDA graph OOM)
     llm = LLM(
         model=vllm_path,
         tensor_parallel_size=1,
         trust_remote_code=True,
-        gpu_memory_utilization=0.9,
+        gpu_memory_utilization=0.5,
+        enforce_eager=True,
     )
     sampling_params = SamplingParams(
         temperature=temperature,
