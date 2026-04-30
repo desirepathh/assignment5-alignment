@@ -231,6 +231,14 @@ def main():
                 result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=True)
                 policy_log_probs = result["log_probs"]
                 batch_old_log_probs = old_log_probs[batch_idx].to(device)
+
+                # 对齐序列长度（不同 microbatch 的 padding 长度可能不同）
+                cur_len = policy_log_probs.size(1)
+                old_len = batch_old_log_probs.size(1)
+                if cur_len > old_len:
+                    batch_old_log_probs = torch.nn.functional.pad(batch_old_log_probs, (0, cur_len - old_len))
+                elif old_len > cur_len:
+                    batch_old_log_probs = batch_old_log_probs[:, :cur_len]
                 batch_advantages = advantages[batch_idx].unsqueeze(-1).to(device)
                 batch_raw_rewards = raw_rewards[batch_idx].unsqueeze(-1).to(device)
 
