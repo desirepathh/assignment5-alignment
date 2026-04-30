@@ -228,7 +228,7 @@ def main():
                 labels = tokenized["labels"].to(device)
                 response_mask = tokenized["response_mask"].to(device)
 
-                result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=True)
+                result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=False)
                 policy_log_probs = result["log_probs"]
                 batch_old_log_probs = old_log_probs[batch_idx].to(device)
 
@@ -260,6 +260,8 @@ def main():
         # logging
         if (iteration + 1) % args.log_every == 0:
             clip_frac = metadata.get("clip_fraction", 0)
+            if isinstance(clip_frac, torch.Tensor):
+                clip_frac = clip_frac.item()
             loss_val = loss.item()
             print(f"Loss: {loss_val:.4f} | Clip frac: {clip_frac:.4f}")
             logger.log({
