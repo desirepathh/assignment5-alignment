@@ -220,15 +220,25 @@ def main():
         ckpt = args.resume_from_checkpoint
         print(f"Resuming from {ckpt}")
         if args.use_lora:
-            from peft import PeftModel
             base = AutoModelForCausalLM.from_pretrained(
                 args.model_name, torch_dtype=torch.bfloat16,
                 device_map="auto", trust_remote_code=True)
-            model = PeftModel.from_pretrained(base, ckpt)
+            model = setup_lora(base, args.lora_rank, args.lora_alpha)
+            adapter_file = os.path.join(ckpt, "adapter_model.safetensors")
+            if os.path.exists(adapter_file):
+                from safetensors.torch import load_file
+                state_dict = load_file(adapter_file)
+            else:
+                state_dict = torch.load(
+                    os.path.join(ckpt, "adapter_model.bin"),
+                    map_location="cpu",
+                )
+            model.load_state_dict(state_dict, strict=False)
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 ckpt, torch_dtype=torch.bfloat16,
                 device_map="auto", trust_remote_code=True)
+        model.train()
         optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         opt_file = os.path.join(ckpt, "optimizer.pt")
         if os.path.exists(opt_file):
