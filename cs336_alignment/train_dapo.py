@@ -52,9 +52,9 @@ def parse_args():
     parser.add_argument("--n_prompts_per_rollout", type=int, default=8)
     parser.add_argument("--group_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=5e-6)
-    parser.add_argument("--microbatch_size", type=int, default=2)
+    parser.add_argument("--microbatch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
-    parser.add_argument("--max_response_length", type=int, default=1024)
+    parser.add_argument("--max_response_length", type=int, default=512)
     parser.add_argument("--generation_temperature", type=float, default=1.0,
                         help="DAPO uses higher temperature for diversity (default: 1.0)")
     parser.add_argument("--generation_top_p", type=float, default=0.9)
@@ -105,28 +105,29 @@ def setup_lora(model, lora_rank, lora_alpha):
 
 def generate_rollouts(model, tokenizer, prompts, group_size, max_length,
                       temperature, top_p, device):
-    """Generate rollouts using HF model.generate()."""
+    """Generate rollouts using batched HF model.generate()."""
     model.eval()
     all_prompts = []
     all_responses = []
-    for prompt in prompts:
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=max_length,
-                temperature=temperature,
-                top_p=top_p,
-                do_sample=True,
-                num_return_sequences=group_size,
-                pad_token_id=tokenizer.pad_token_id,
-            )
-        prompt_len = inputs["input_ids"].shape[1]
-        for j in range(group_size):
-            generated_ids = outputs[j, prompt_len:]
-            response = tokenizer.decode(generated_ids, skip_special_tokens=True)
-            all_prompts.append(prompt)
-            all_responses.append(response)
+    with torch.no_grad():
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_length,
+            temperature=temperature,
+            top_p=top_p,
+            do_sample=True,
+            num_return_sequences=group_size,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        prompt_lens = (inputs["attention_mask"].sum(dim=1)).tolist()
+        for i, prompt in enumerate(prompts):
+            for j in range(group_size):
+                idx = i * group_size + j
+                generated_ids = outputs[idx, prompt_lens[i]:]
+                response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+                all_prompts.append(prompt)
+                all_responses.append(response)
     model.train()
     return all_prompts, all_responses
 
