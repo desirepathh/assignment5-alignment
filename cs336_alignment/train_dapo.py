@@ -5,8 +5,7 @@ DAPO improvements over GRPO:
 2. Token-level Loss — normalize by actual response length per sample
 3. Over-long Filtering — filter overly long responses
 4. Asymmetric Clipping — cliprange_low=0.2, cliprange_high=0.28
-5. vLLM Generation — fast batched rollout generation
-6. Higher Temperature — temperature=1.0 for diversity
+5. Higher Temperature — temperature=1.0 for diversity
 
 Usage:
     python train_dapo.py \
@@ -21,10 +20,8 @@ Usage:
 """
 
 import argparse
-import gc
 import json
 import os
-import subprocess
 import sys
 
 import torch
@@ -51,7 +48,7 @@ def parse_args():
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--data_path", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default="output/dapo")
-    parser.add_argument("--n_iterations", type=int, default=50)
+    parser.add_argument("--n_iterations", type=int, default=200)
     parser.add_argument("--n_prompts_per_rollout", type=int, default=8)
     parser.add_argument("--group_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=5e-6)
@@ -104,66 +101,32 @@ def setup_lora(model, lora_rank, lora_alpha):
     return model
 
 
-def generate_rollouts_vllm(vllm_path, prompts, group_size, max_length,
-                           temperature, top_p, temp_dir):
-    """Run vLLM in a subprocess to guarantee GPU memory is freed after generation."""
-    prompts_file = os.path.join(temp_dir, "prompts.json")
-    results_file = os.path.join(temp_dir, "results.json")
-    with open(prompts_file, "w") as f:
-        json.dump(prompts, f)
-
-    script = (
-        "import json\n"
-        "from vllm import LLM, SamplingParams\n"
-        f'with open("{prompts_file}") as f:\n'
-        "    prompts = json.load(f)\n"
-        f'llm = LLM(model="{vllm_path}", tensor_parallel_size=1,'
-        ' trust_remote_code=True, gpu_memory_utilization=0.9, enforce_eager=True)\n'
-        f'sp = SamplingParams(temperature={temperature}, top_p={top_p},'
-        f' max_tokens={max_length}, n={group_size})\n'
-        "outputs = llm.generate(prompts, sp)\n"
-        "results = []\n"
-        "for prompt, output in zip(prompts, outputs):\n"
-        "    for resp in output.outputs:\n"
-        '        results.append({"prompt": prompt, "response": resp.text})\n'
-        f'with open("{results_file}", "w") as f:\n'
-        "    json.dump(results, f)\n"
-    )
-    subprocess.run([sys.executable, "-c", script], check=True)
-
-    with open(results_file) as f:
-        results = json.load(f)
-
-    all_prompts = [r["prompt"] for r in results]
-    all_responses = [r["response"] for r in results]
-    return all_prompts, all_responses
-
-
-def reload_training_model(base_model_path, adapter_path, use_lora, lora_rank, lora_alpha):
-    """Reload base model + LoRA adapter weights for training."""
-    base = AutoModelForCausalLM.from_pretrained(
-        base_model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    if use_lora:
-        model = setup_lora(base, lora_rank, lora_alpha)
-        # Load saved adapter weights manually (avoids PeftModel.from_pretrained version issues)
-        adapter_file = os.path.join(adapter_path, "adapter_model.safetensors")
-        if os.path.exists(adapter_file):
-            from safetensors.torch import load_file
-            state_dict = load_file(adapter_file)
-        else:
-            state_dict = torch.load(
-                os.path.join(adapter_path, "adapter_model.bin"),
-                map_location="cpu",
+def generate_rollouts(model, tokenizer, prompts, group_size, max_length,
+                      temperature, top_p, device):
+    """Generate rollouts using HF model.generate()."""
+    model.eval()
+    all_prompts = []
+    all_responses = []
+    for prompt in prompts:
+        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_length,
+                temperature=temperature,
+                top_p=top_p,
+                do_sample=True,
+                num_return_sequences=group_size,
+                pad_token_id=tokenizer.pad_token_id,
             )
-        model.load_state_dict(state_dict, strict=False)
-    else:
-        model = base
+        prompt_len = inputs["input_ids"].shape[1]
+        for j in range(group_size):
+            generated_ids = outputs[j, prompt_len:]
+            response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+            all_prompts.append(prompt)
+            all_responses.append(response)
     model.train()
-    return model
+    return all_prompts, all_responses
 
 
 def dynamic_sampling_filter(prompts, responses, ground_truths, raw_rewards, group_size):
@@ -225,8 +188,7 @@ def main():
     args = parse_args()
     torch.manual_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
-    temp_dir = os.path.join(args.output_dir, "_temp")
-    os.makedirs(temp_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -248,9 +210,6 @@ def main():
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     logger = MetricsLogger(os.path.join(args.output_dir, "training_log.jsonl"))
 
-    base_model_path = args.model_name
-    opt_path = os.path.join(temp_dir, "optimizer.pt")
-
     for iteration in range(args.n_iterations):
         print(f"\n=== Iteration {iteration + 1}/{args.n_iterations} ===")
 
@@ -260,35 +219,12 @@ def main():
         prompts_text = [R1_ZERO_PROMPT.format(question=p["problem"]) for p in sampled_problems]
         ground_truths = [str(p["expected_answer"]) for p in sampled_problems]
 
-        # 2. Generate rollouts with vLLM
-        #    Save state → merge → free GPU → vLLM generate → reload
-        adapter_path = os.path.join(temp_dir, "adapter")
-        model.save_pretrained(adapter_path)
-        torch.save(optimizer.state_dict(), opt_path)
-
-        merged = model.merge_and_unload()
-        vllm_path = os.path.join(temp_dir, "vllm_model")
-        merged.save_pretrained(vllm_path)
-        tokenizer.save_pretrained(vllm_path)
-        merged = merged.cpu()
-        del model, optimizer, merged
-        gc.collect()
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-
-        rollout_prompts, rollout_responses = generate_rollouts_vllm(
-            vllm_path, prompts_text, args.group_size,
+        # 2. Generate rollouts
+        rollout_prompts, rollout_responses = generate_rollouts(
+            model, tokenizer, prompts_text, args.group_size,
             args.max_response_length, args.generation_temperature,
-            args.generation_top_p, temp_dir,
+            args.generation_top_p, device,
         )
-
-        # Reload training model + optimizer
-        model = reload_training_model(
-            base_model_path, adapter_path,
-            args.use_lora, args.lora_rank, args.lora_alpha,
-        )
-        optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        optimizer.load_state_dict(torch.load(opt_path))
 
         repeated_ground_truths = []
         for gt in ground_truths:
@@ -353,7 +289,6 @@ def main():
               f"Filtered: {n_filtered}/{valid_n}")
 
         # 4. Compute old_log_probs
-        device = next(model.parameters()).device
         model.eval()
         all_old_log_probs = []
         for i in range(0, len(filtered_prompts), args.microbatch_size):
