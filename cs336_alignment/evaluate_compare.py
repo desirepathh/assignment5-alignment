@@ -44,9 +44,9 @@ logger = logging.getLogger(__name__)
 
 R1_ZERO_PROMPT_PATH = "data/sft-reason/r1_zero.prompt"
 
-STAGE_ORDER = ["baseline", "sft", "grpo"]
-STAGE_COLORS = {"baseline": "#4C72B0", "sft": "#55A868", "grpo": "#C44E52"}
-STAGE_LABELS = {"baseline": "Baseline", "sft": "SFT", "grpo": "GRPO"}
+STAGE_ORDER = ["baseline", "sft", "grpo", "dapo"]
+STAGE_COLORS = {"baseline": "#4C72B0", "sft": "#55A868", "grpo": "#C44E52", "dapo": "#8172B2"}
+STAGE_LABELS = {"baseline": "Baseline", "sft": "SFT", "grpo": "GRPO", "dapo": "DAPO"}
 
 
 def evaluate_single_model(
