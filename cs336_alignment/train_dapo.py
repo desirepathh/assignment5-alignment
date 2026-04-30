@@ -270,8 +270,10 @@ def main():
         vllm_path = os.path.join(temp_dir, "vllm_model")
         merged.save_pretrained(vllm_path)
         tokenizer.save_pretrained(vllm_path)
+        merged = merged.cpu()
         del model, optimizer, merged
         gc.collect()
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
         rollout_prompts, rollout_responses = generate_rollouts_vllm(
