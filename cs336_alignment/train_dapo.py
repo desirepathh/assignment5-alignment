@@ -152,9 +152,7 @@ def generate_rollouts_vllm(model, tokenizer, prompts, group_size, max_length,
 
 
 def reload_training_model(base_model_path, adapter_path, use_lora, lora_rank, lora_alpha):
-    """Reload base model + LoRA adapter for training."""
-    from peft import PeftModel
-
+    """Reload base model + LoRA adapter weights for training."""
     base = AutoModelForCausalLM.from_pretrained(
         base_model_path,
         torch_dtype=torch.bfloat16,
@@ -162,7 +160,20 @@ def reload_training_model(base_model_path, adapter_path, use_lora, lora_rank, lo
         trust_remote_code=True,
     )
     if use_lora:
-        model = PeftModel.from_pretrained(base, adapter_path)
+        model = setup_lora(base, lora_rank, lora_alpha)
+        # Load saved adapter weights manually (avoids PeftModel.from_pretrained version issues)
+        adapter_file = os.path.join(adapter_path, "adapter_model.safetensors")
+        if os.path.exists(adapter_file):
+            from safetensors.torch import load_file
+            state_dict = load_file(adapter_file)
+        else:
+            state_dict = torch.load(
+                os.path.join(adapter_path, "adapter_model.bin"),
+                map_location="cpu",
+            )
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        model = base
     model.train()
     return model
 
