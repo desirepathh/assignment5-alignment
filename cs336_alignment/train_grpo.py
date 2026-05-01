@@ -65,6 +65,10 @@ def parse_args():
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--save_every", type=int, default=50)
     parser.add_argument("--log_every", type=int, default=1)
+    parser.add_argument("--kl_coef", type=float, default=0.01,
+                        help="KL divergence coefficient (beta in GRPO paper)")
+    parser.add_argument("--ref_model_name", type=str, default=None,
+                        help="Path to SFT reference model for KL. Defaults to model_name if not set.")
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -143,6 +147,19 @@ def main():
     if args.use_lora:
         model = setup_lora(model, args.lora_rank, args.lora_alpha)
 
+    # 加载 SFT 参考模型（用于 KL 散度计算）
+    ref_model_name = args.ref_model_name or args.model_name
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        ref_model_name,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    ref_model.eval()
+    for param in ref_model.parameters():
+        param.requires_grad = False
+    print(f"Loaded reference model from {ref_model_name} for KL penalty (beta={args.kl_coef})")
+
     # 加载数据
     problems = load_problems(args.data_path)
     print(f"Loaded {len(problems)} problems")
@@ -194,9 +211,10 @@ def main():
         print(f"Mean reward: {mean_reward:.4f} | Std: {std_reward:.4f} | "
               f"Format: {mean_format_reward:.2%} | Answer: {mean_answer_reward:.2%}")
 
-        # 4. 计算 old_log_probs
+        # 4. 计算 old_log_probs 和 ref_log_probs（用于 KL）
         model.eval()
         all_old_log_probs = []
+        all_ref_log_probs = []
         for i in range(0, len(rollout_prompts), args.microbatch_size):
             batch_prompts = rollout_prompts[i:i + args.microbatch_size]
             batch_responses = rollout_responses[i:i + args.microbatch_size]
@@ -209,9 +227,15 @@ def main():
                 result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=False)
             all_old_log_probs.append(result["log_probs"].cpu())
 
+            with torch.no_grad():
+                ref_result = run_get_response_log_probs(ref_model, input_ids, labels, return_token_entropy=False)
+            all_ref_log_probs.append(ref_result["log_probs"].cpu())
+
         max_len = max(t.size(1) for t in all_old_log_probs)
         all_old_log_probs = [torch.nn.functional.pad(t, (0, max_len - t.size(1))) for t in all_old_log_probs]
         old_log_probs = torch.cat(all_old_log_probs, dim=0)
+        all_ref_log_probs = [torch.nn.functional.pad(t, (0, max_len - t.size(1))) for t in all_ref_log_probs]
+        ref_log_probs = torch.cat(all_ref_log_probs, dim=0)
         model.train()
 
         # 5. 策略更新（可重复多步）
@@ -232,14 +256,24 @@ def main():
                 result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=False)
                 policy_log_probs = result["log_probs"]
                 batch_old_log_probs = old_log_probs[batch_idx].to(device)
+                batch_ref_log_probs = ref_log_probs[batch_idx].to(device)
 
                 # 对齐序列长度（不同 microbatch 的 padding 长度可能不同）
                 cur_len = policy_log_probs.size(1)
                 old_len = batch_old_log_probs.size(1)
-                if cur_len > old_len:
-                    batch_old_log_probs = torch.nn.functional.pad(batch_old_log_probs, (0, cur_len - old_len))
-                elif old_len > cur_len:
-                    batch_old_log_probs = batch_old_log_probs[:, :cur_len]
+                ref_len = batch_ref_log_probs.size(1)
+                max_batch_len = max(cur_len, old_len, ref_len)
+                if cur_len < max_batch_len:
+                    policy_log_probs = torch.nn.functional.pad(policy_log_probs, (0, max_batch_len - cur_len))
+                    response_mask = torch.nn.functional.pad(response_mask, (0, max_batch_len - cur_len))
+                if old_len < max_batch_len:
+                    batch_old_log_probs = torch.nn.functional.pad(batch_old_log_probs, (0, max_batch_len - old_len))
+                elif old_len > max_batch_len:
+                    batch_old_log_probs = batch_old_log_probs[:, :max_batch_len]
+                if ref_len < max_batch_len:
+                    batch_ref_log_probs = torch.nn.functional.pad(batch_ref_log_probs, (0, max_batch_len - ref_len))
+                elif ref_len > max_batch_len:
+                    batch_ref_log_probs = batch_ref_log_probs[:, :max_batch_len]
                 batch_advantages = advantages[batch_idx].unsqueeze(-1).to(device)
                 batch_raw_rewards = raw_rewards[batch_idx].unsqueeze(-1).to(device)
 
@@ -254,6 +288,13 @@ def main():
                     cliprange=args.cliprange,
                 )
 
+                # KL 惩罚: KL(π_θ || π_ref) ≈ log π_θ - log π_ref
+                # 只在 response token 上计算
+                kl_per_token = (policy_log_probs - batch_ref_log_probs) * response_mask
+                n_valid = response_mask.sum().clamp(min=1)
+                kl_loss = args.kl_coef * kl_per_token.sum() / n_valid / args.gradient_accumulation_steps
+                kl_loss.backward()
+
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             optimizer.zero_grad()
@@ -264,10 +305,12 @@ def main():
             if isinstance(clip_frac, torch.Tensor):
                 clip_frac = clip_frac.item()
             loss_val = loss.item()
-            print(f"Loss: {loss_val:.4f} | Clip frac: {clip_frac:.4f}")
+            kl_val = kl_loss.item()
+            print(f"Loss: {loss_val:.4f} | KL: {kl_val:.4f} | Clip frac: {clip_frac:.4f}")
             logger.log({
                 "iteration": iteration + 1,
                 "loss": loss_val,
+                "kl_loss": kl_val,
                 "mean_reward": mean_reward,
                 "std_reward": std_reward,
                 "mean_advantage": mean_advantage,

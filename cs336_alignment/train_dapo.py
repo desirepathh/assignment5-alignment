@@ -35,7 +35,7 @@ from tests.adapters import (
     run_tokenize_prompt_and_output,
 )
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
-from cs336_alignment.plot_utils import MetricsLogger, plot_grpo_curves
+from cs336_alignment.plot_utils import MetricsLogger, plot_dapo_curves
 
 R1_ZERO_PROMPT = """A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. The reasoning process is enclosed within <thinkPubMed> </thinkPubMed> and answer is enclosed within <answer> </answer> tags, respectively, i.e., <thinkPubMed> reasoning process here </thinkPubMed> <answer> answer here </answer>.
 User: {question}
@@ -428,7 +428,7 @@ def main():
     print(f"Saved final model to {save_path}")
 
     logger.close()
-    plot_grpo_curves(os.path.join(args.output_dir, "training_log.jsonl"), args.output_dir)
+    plot_dapo_curves(os.path.join(args.output_dir, "training_log.jsonl"), args.output_dir)
 
 
 if __name__ == "__main__":

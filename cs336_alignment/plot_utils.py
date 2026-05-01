@@ -158,3 +158,56 @@ def plot_grpo_curves(log_path: str, output_dir: str):
     plt.savefig(fig_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Training curves saved to {fig_path}")
+
+
+def plot_dapo_curves(log_path: str, output_dir: str):
+    """绘制 DAPO 关键训练曲线：reward + breakdown, loss, n_filtered。"""
+    records = load_metrics(log_path)
+    if not records:
+        return
+
+    iters = [r["iteration"] for r in records]
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
+
+    # 1. Reward + breakdown
+    ax = axes[0]
+    mean_rewards = [r["mean_reward"] for r in records]
+    answer_rewards = [r.get("mean_answer_reward", 0) for r in records]
+    format_rewards = [r.get("mean_format_reward", 0) for r in records]
+    ax.plot(iters, mean_rewards, color="#55A868", linewidth=1.2, label="Mean Reward")
+    ax.plot(iters, answer_rewards, color="#C44E52", linewidth=1, linestyle="--", label="Answer Reward")
+    ax.plot(iters, format_rewards, color="#4C72B0", linewidth=1, linestyle=":", label="Format Reward")
+    ax.set_ylabel("Reward")
+    ax.set_title("DAPO Reward")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="upper left", fontsize=8)
+    ax.grid(alpha=0.3)
+
+    # 2. Loss
+    ax = axes[1]
+    losses = [r["loss"] for r in records]
+    ax.plot(iters, losses, color="#C44E52", linewidth=1)
+    ax.set_ylabel("Loss")
+    ax.set_title("DAPO Training Loss")
+    loss_min, loss_max = min(losses), max(losses)
+    margin = max(abs(loss_max - loss_min) * 0.1, 0.01)
+    ax.set_ylim(loss_min - margin, loss_max + margin)
+    ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+    ax.grid(alpha=0.3)
+
+    # 3. DAPO Filtering
+    ax = axes[2]
+    n_filtered = [r.get("n_filtered", 0) for r in records]
+    ax.plot(iters, n_filtered, color="#8C5615", linewidth=1, label="Filtered (Dynamic Sampling)")
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Samples Filtered")
+    ax.set_title("DAPO Dynamic Sampling Filter")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    fig_path = os.path.join(output_dir, "dapo_training_curves.png")
+    plt.savefig(fig_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Training curves saved to {fig_path}")
