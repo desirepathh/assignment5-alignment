@@ -25,8 +25,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from tests.adapters import (
     run_compute_group_normalized_rewards,
+    run_compute_policy_gradient_loss,
     run_get_response_log_probs,
-    run_grpo_microbatch_train_step,
+    run_masked_mean,
     run_tokenize_prompt_and_output,
 )
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
@@ -277,23 +278,22 @@ def main():
                 batch_advantages = advantages[batch_idx].unsqueeze(-1).to(device)
                 batch_raw_rewards = raw_rewards[batch_idx].unsqueeze(-1).to(device)
 
-                loss, metadata = run_grpo_microbatch_train_step(
+                per_token_loss, metadata = run_compute_policy_gradient_loss(
                     policy_log_probs=policy_log_probs,
-                    response_mask=response_mask,
-                    gradient_accumulation_steps=args.gradient_accumulation_steps,
                     loss_type=args.loss_type,
                     raw_rewards=batch_raw_rewards,
                     advantages=batch_advantages,
                     old_log_probs=batch_old_log_probs,
                     cliprange=args.cliprange,
                 )
+                loss = run_masked_mean(per_token_loss, response_mask, dim=-1).mean() / args.gradient_accumulation_steps
 
                 # KL 惩罚: KL(π_θ || π_ref) ≈ log π_θ - log π_ref
-                # 只在 response token 上计算
                 kl_per_token = (policy_log_probs - batch_ref_log_probs) * response_mask
                 n_valid = response_mask.sum().clamp(min=1)
                 kl_loss = args.kl_coef * kl_per_token.sum() / n_valid / args.gradient_accumulation_steps
-                kl_loss.backward()
+
+                (loss + kl_loss).backward()
 
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
