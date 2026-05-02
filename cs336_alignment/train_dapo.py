@@ -34,7 +34,7 @@ from tests.adapters import (
     run_get_response_log_probs,
     run_tokenize_prompt_and_output,
 )
-from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, r1_zero_additive_reward_fn
 from cs336_alignment.plot_utils import MetricsLogger, plot_dapo_curves
 
 R1_ZERO_PROMPT = """A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. The reasoning process is enclosed within <thinkPubMed> </thinkPubMed> and answer is enclosed within <answer> </answer> tags, respectively, i.e., <thinkPubMed> reasoning process here </thinkPubMed> <answer> answer here </answer>.
@@ -65,8 +65,9 @@ def parse_args():
     parser.add_argument("--advantage_eps", type=float, default=1e-6)
     parser.add_argument("--normalize_by_std", action="store_true", default=True)
     parser.add_argument("--num_update_steps_per_rollout", type=int, default=1)
-    parser.add_argument("--max_response_chars", type=int, default=4000,
-                        help="Filter responses exceeding this length")
+    parser.add_argument("--reward_fn", type=str, default="multiplicative",
+                        choices=["multiplicative", "additive"],
+                        help="multiplicative: format*answer, additive: format+2*answer")
     parser.add_argument("--use_lora", action="store_true")
     parser.add_argument("--lora_rank", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=32)
@@ -211,6 +212,9 @@ def main():
     problems = load_problems(args.data_path)
     print(f"Loaded {len(problems)} problems")
 
+    reward_fn = r1_zero_additive_reward_fn if args.reward_fn == "additive" else r1_zero_reward_fn
+    print(f"Using reward function: {args.reward_fn}")
+
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     logger = MetricsLogger(os.path.join(args.output_dir, "training_log.jsonl"))
 
@@ -279,7 +283,7 @@ def main():
 
         # 3. Compute rewards
         reward_details_all = [
-            r1_zero_reward_fn(r, gt) for r, gt in zip(rollout_responses, repeated_ground_truths)
+            reward_fn(r, gt) for r, gt in zip(rollout_responses, repeated_ground_truths)
         ]
         raw_rewards = torch.tensor([d["reward"] for d in reward_details_all])
 
@@ -308,7 +312,7 @@ def main():
 
         # Recompute advantages for filtered samples
         advantages, _, _ = run_compute_group_normalized_rewards(
-            reward_fn=r1_zero_reward_fn,
+            reward_fn=reward_fn,
             rollout_responses=filtered_responses,
             repeated_ground_truths=filtered_gts,
             group_size=args.group_size,
