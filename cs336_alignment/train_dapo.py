@@ -65,6 +65,8 @@ def parse_args():
     parser.add_argument("--advantage_eps", type=float, default=1e-6)
     parser.add_argument("--normalize_by_std", action="store_true", default=True)
     parser.add_argument("--num_update_steps_per_rollout", type=int, default=1)
+    parser.add_argument("--max_response_chars", type=int, default=4000,
+                        help="Filter responses exceeding this length")
     parser.add_argument("--reward_fn", type=str, default="multiplicative",
                         choices=["multiplicative", "additive"],
                         help="multiplicative: format*answer, additive: format+2*answer")
