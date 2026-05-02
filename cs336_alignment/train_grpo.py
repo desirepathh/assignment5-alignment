@@ -30,7 +30,7 @@ from tests.adapters import (
     run_masked_mean,
     run_tokenize_prompt_and_output,
 )
-from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, r1_zero_additive_reward_fn
 from cs336_alignment.plot_utils import MetricsLogger, plot_grpo_curves
 
 R1_ZERO_PROMPT = """A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. The reasoning process is enclosed within <thinkPubMed> </thinkPubMed> and answer is enclosed within <answer> </answer> tags, respectively, i.e., <thinkPubMed> reasoning process here </thinkPubMed> <answer> answer here </answer>.
@@ -56,6 +56,9 @@ def parse_args():
     parser.add_argument("--cliprange", type=float, default=0.2)
     parser.add_argument("--loss_type", type=str, default="grpo_clip",
                         choices=["no_baseline", "reinforce_with_baseline", "grpo_clip"])
+    parser.add_argument("--reward_fn", type=str, default="multiplicative",
+                        choices=["multiplicative", "additive"],
+                        help="multiplicative: format*answer, additive: format+2*answer")
     parser.add_argument("--advantage_eps", type=float, default=1e-6)
     parser.add_argument("--normalize_by_std", action="store_true", default=True)
     parser.add_argument("--num_update_steps_per_rollout", type=int, default=1)
@@ -165,6 +168,10 @@ def main():
     problems = load_problems(args.data_path)
     print(f"Loaded {len(problems)} problems")
 
+    # 选择奖励函数
+    reward_fn = r1_zero_additive_reward_fn if args.reward_fn == "additive" else r1_zero_reward_fn
+    print(f"Using reward function: {args.reward_fn}")
+
     # optimizer
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     logger = MetricsLogger(os.path.join(args.output_dir, "training_log.jsonl"))
@@ -192,7 +199,7 @@ def main():
 
         # 3. 计算 reward 和 advantage
         advantages, raw_rewards, reward_metadata = run_compute_group_normalized_rewards(
-            reward_fn=r1_zero_reward_fn,
+            reward_fn=reward_fn,
             rollout_responses=rollout_responses,
             repeated_ground_truths=repeated_ground_truths,
             group_size=args.group_size,
@@ -205,7 +212,7 @@ def main():
         mean_advantage = advantages.mean().item()
 
         # reward 组件拆分
-        reward_details = [r1_zero_reward_fn(r, gt) for r, gt in zip(rollout_responses, repeated_ground_truths)]
+        reward_details = [reward_fn(r, gt) for r, gt in zip(rollout_responses, repeated_ground_truths)]
         mean_format_reward = sum(d["format_reward"] for d in reward_details) / len(reward_details)
         mean_answer_reward = sum(d["answer_reward"] for d in reward_details) / len(reward_details)
 

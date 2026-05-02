@@ -1048,6 +1048,48 @@ def r1_zero_reward_fn(response, ground_truth, fast=True):
         }
 
 
+def r1_zero_additive_reward_fn(response, ground_truth, fast=True, answer_weight=2.0):
+    """加法奖励：reward = format_reward + answer_weight * answer_reward
+    0: 无格式无答案 / 1: 有格式但答案错 / 1+answer_weight: 格式对且答案对
+    """
+    if "<answer>" in response and "</answer>" in response:
+        model_answer = response.split("<answer>")[-1].replace("</answer>", "")
+        if "\\boxed" in model_answer:
+            model_answer = extract_answer(model_answer)
+            if model_answer is None:
+                return {
+                    "format_reward": 1.0,
+                    "answer_reward": 0.0,
+                    "reward": 1.0,
+                }
+        if isinstance(ground_truth, float) or isinstance(ground_truth, int):
+            ground_truth = str(ground_truth)
+        if isinstance(ground_truth, str):
+            is_correct = grade(model_answer, ground_truth, fast)
+        elif isinstance(ground_truth, list):
+            is_correct = False
+            for gt in ground_truth:
+                is_correct |= grade(model_answer, gt, fast)
+        if is_correct:
+            return {
+                "format_reward": 1.0,
+                "answer_reward": 1.0,
+                "reward": 1.0 + answer_weight,
+            }
+        else:
+            return {
+                "format_reward": 1.0,
+                "answer_reward": 0.0,
+                "reward": 1.0,
+            }
+    else:
+        return {
+            "format_reward": 0.0,
+            "answer_reward": 0.0,
+            "reward": 0.0,
+        }
+
+
 def question_only_reward_fn(response, ground_truth, fast=True):
     model_answer = extract_answer(response)
     if model_answer is None:
