@@ -143,7 +143,7 @@ def dynamic_sampling_filter(prompts, responses, ground_truths, raw_rewards, grou
         start = g * group_size
         end = start + group_size
         group_rewards = raw_rewards[start:end]
-        if (group_rewards == 1).all() or (group_rewards == 0).all():
+        if (group_rewards == group_rewards[0]).all():
             continue
         keep_indices.extend(range(start, end))
 
