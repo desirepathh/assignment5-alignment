@@ -74,6 +74,8 @@ def parse_args():
     parser.add_argument("--ref_model_name", type=str, default=None,
                         help="Path to SFT reference model for KL. Defaults to model_name if not set.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Path to checkpoint directory to resume from")
     return parser.parse_args()
 
 
@@ -176,7 +178,42 @@ def main():
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     logger = MetricsLogger(os.path.join(args.output_dir, "training_log.jsonl"))
 
-    for iteration in range(args.n_iterations):
+    # resume from checkpoint
+    start_iteration = 0
+    if args.resume_from_checkpoint:
+        ckpt = args.resume_from_checkpoint
+        print(f"Resuming from {ckpt}")
+        if args.use_lora:
+            base = AutoModelForCausalLM.from_pretrained(
+                args.model_name, torch_dtype=torch.bfloat16,
+                device_map="auto", trust_remote_code=True)
+            model = setup_lora(base, args.lora_rank, args.lora_alpha)
+            adapter_file = os.path.join(ckpt, "adapter_model.safetensors")
+            if os.path.exists(adapter_file):
+                from safetensors.torch import load_file
+                state_dict = load_file(adapter_file)
+            else:
+                state_dict = torch.load(
+                    os.path.join(ckpt, "adapter_model.bin"),
+                    map_location="cpu",
+                )
+            model.load_state_dict(state_dict, strict=False)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                ckpt, torch_dtype=torch.bfloat16,
+                device_map="auto", trust_remote_code=True)
+        model.train()
+        optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        opt_file = os.path.join(ckpt, "optimizer.pt")
+        if os.path.exists(opt_file):
+            optimizer.load_state_dict(torch.load(opt_file, map_location=device))
+        iter_file = os.path.join(ckpt, "iteration.txt")
+        if os.path.exists(iter_file):
+            with open(iter_file) as f:
+                start_iteration = int(f.read().strip())
+        print(f"Resumed from iteration {start_iteration}")
+
+    for iteration in range(start_iteration, args.n_iterations):
         print(f"\n=== Iteration {iteration + 1}/{args.n_iterations} ===")
 
         # 1. 采样 prompt
@@ -332,6 +369,9 @@ def main():
             save_path = os.path.join(args.output_dir, f"checkpoint-{iteration + 1}")
             model.save_pretrained(save_path)
             tokenizer.save_pretrained(save_path)
+            torch.save(optimizer.state_dict(), os.path.join(save_path, "optimizer.pt"))
+            with open(os.path.join(save_path, "iteration.txt"), "w") as f:
+                f.write(str(iteration + 1))
             print(f"Saved checkpoint to {save_path}")
 
     # 保存最终模型
