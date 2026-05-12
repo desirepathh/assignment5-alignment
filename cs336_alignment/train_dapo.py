@@ -34,7 +34,7 @@ from tests.adapters import (
     run_get_response_log_probs,
     run_tokenize_prompt_and_output,
 )
-from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, r1_zero_additive_reward_fn
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, r1_zero_additive_reward_fn, dapo_reward_fn
 from cs336_alignment.plot_utils import MetricsLogger, plot_dapo_curves
 
 R1_ZERO_PROMPT = """A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. The reasoning process is enclosed within <thinkPubMed> </thinkPubMed> and answer is enclosed within <answer> </answer> tags, respectively, i.e., <thinkPubMed> reasoning process here </thinkPubMed> <answer> answer here </answer>.
@@ -68,8 +68,8 @@ def parse_args():
     parser.add_argument("--max_response_chars", type=int, default=4000,
                         help="Filter responses exceeding this length")
     parser.add_argument("--reward_fn", type=str, default="multiplicative",
-                        choices=["multiplicative", "additive"],
-                        help="multiplicative: format*answer, additive: format+2*answer")
+                        choices=["multiplicative", "additive", "dapo"],
+                        help="multiplicative: format*answer, additive: format+answer+length, dapo: format+answer+soft_length")
     parser.add_argument("--use_lora", action="store_true")
     parser.add_argument("--lora_rank", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=32)
@@ -214,7 +214,12 @@ def main():
     problems = load_problems(args.data_path)
     print(f"Loaded {len(problems)} problems")
 
-    reward_fn = r1_zero_additive_reward_fn if args.reward_fn == "additive" else r1_zero_reward_fn
+    if args.reward_fn == "additive":
+        reward_fn = r1_zero_additive_reward_fn
+    elif args.reward_fn == "dapo":
+        reward_fn = dapo_reward_fn
+    else:
+        reward_fn = r1_zero_reward_fn
     print(f"Using reward function: {args.reward_fn}")
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)

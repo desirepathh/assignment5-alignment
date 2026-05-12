@@ -159,7 +159,7 @@ def main():
                 policy_log_probs=log_probs,
                 response_mask=response_mask,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
-                normalize_constant=1.0,
+                normalize_constant=response_mask.sum(dim=-1).float().mean().item(),
             )
 
             running_loss += loss.item()
