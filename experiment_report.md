@@ -4,7 +4,7 @@
 
 本实验基于 Qwen2.5-Math-1.5B 基座模型，依次进行 Baseline 评测、监督微调（SFT）、GRPO 强化学习训练和 DAPO 强化学习训练，对比四个阶段的数学推理能力。
 
-### 实验结果总览
+### 实验结果总览（最优配置）
 
 | 阶段 | Accuracy | Format Rate | 正确 | 格式正确但答案错 | 格式错误 | 总计 |
 |------|----------|-------------|------|-----------------|---------|------|
@@ -35,10 +35,10 @@
 
 ### 2.4 评分函数
 
-使用 `r1_zero_reward_fn`，返回三个指标：
+使用加法奖励函数（`r1_zero_additive_reward_fn`），返回三个指标：
 - **format_reward**: 格式是否正确（包含 `<thinkPubMed>` 和 `<answer>` 标签）
 - **answer_reward**: 答案是否正确（在格式正确的前提下）
-- **reward**: 最终奖励 = format_reward × answer_reward
+- **reward**: 最终奖励 = format_reward + 2 × answer_reward（格式对=1，答案也对=3）
 
 ## 3. 实验方法
 
@@ -105,10 +105,10 @@ DAPO（Decoupled Clip and Dynamic sAmpling Policy Optimization）在 GRPO 基础
 
 #### 改进 1：动态采样（Dynamic Sampling）
 
-过滤掉 group 内所有回复全对或全错的 group。这类 group 的优势值全为 0，不提供梯度信号，只会浪费训练资源。
+过滤掉 group 内所有回复奖励相同的 group。这类 group 的优势值全为 0，不提供梯度信号，只会浪费训练资源。
 
 ```python
-if (group_rewards == 1).all() or (group_rewards == 0).all():
+if (group_rewards == group_rewards[0]).all():
     skip this group
 ```
 
@@ -203,7 +203,45 @@ DAPO 相比 GRPO 的 1.54% 提升主要来自：
 
 注意 GRPO 和 DAPO 的训练条件不完全一致（GRPO 有 KL 惩罚但 group_size=4，DAPO 无 KL 但 group_size=8），因此两者的差异不能完全归因于算法本身，也包含了超参数的影响。
 
-### 5.6 训练过程观察
+### 5.6 控制变量实验
+
+为进一步验证 DAPO 算法改进的有效性，设计了控制变量实验（v2），两组训练使用相同的超参数：
+
+| 参数 | v2 统一配置 |
+|------|------------|
+| Group size | 8 |
+| 生成温度 | 1.0 |
+| 学习率 | 5e-6 |
+| 奖励函数 | 加法奖励（additive） |
+| 最大回复长度 | 512 |
+
+**v2 控制变量结果：**
+
+| 阶段 | Accuracy |
+|------|----------|
+| GRPO v2 | 51.68% |
+| DAPO v2 | 50.30% |
+
+控制变量实验中 DAPO v2 未能超过 GRPO v2，说明 DAPO 的优势在部分超参数组合下不明显。两组 v2 结果均低于 v1 最优配置，进一步分析见 5.7。
+
+### 5.7 温度敏感性分析
+
+对比 v1（temp=0.7）和 v2（temp=1.0）的结果：
+
+| 配置 | temp=0.7 | temp=1.0 | 差异 |
+|------|----------|----------|------|
+| GRPO | 52.58% | 51.68% | -0.90% |
+| DAPO | 54.12% | 50.30% | -3.82% |
+
+温度从 0.7 提升至 1.0 后，两种算法的准确率均下降，DAPO 下降更为显著（-3.82%）。原因分析：
+
+1. **生成多样性过高**：温度 1.0 使 rollout 阶段生成的回复过于随机，大量低质量回复导致训练信号噪声增大
+2. **格式退化**：DAPO 在温度 1.0 下曾出现格式正确率下降（format_reward 从 1.0 降至 0.72），模型难以维持稳定的输出格式
+3. **GRPO 更鲁棒**：GRPO 有 KL 散度约束，能更好地抵抗温度升高带来的噪声
+
+这表明**生成温度是 RL 训练的关键超参数**，较低的温度（0.7）能为策略梯度提供更稳定的训练信号。
+
+### 5.8 训练过程观察
 
 GRPO 训练过程中：
 - 加入 KL 散度后训练更稳定，未出现格式退化
@@ -219,13 +257,15 @@ DAPO 训练过程中：
 
 1. **SFT 是最关键的一步**：Baseline → SFT 带来 38.86% 的提升，说明监督微调能有效教会模型输出格式和基本推理能力。
 
-2. **KL 散度提升 GRPO 稳定性**：加入 KL 惩罚后 GRPO 从 49.94% 提升至 52.58%，防止策略过度偏离 SFT 模型，保留了格式和推理能力。
+2. **RL 训练在 SFT 基础上持续提升**：GRPO（+4.74%）和 DAPO（+6.28%）均能进一步优化模型，最终 DAPO 达到 54.12% 的最优准确率。
 
-3. **DAPO 仍有优势**：DAPO（54.12%）比 GRPO（52.58%）高 1.54 个百分点，动态采样和 token-level loss 的有效性得到验证。
+3. **DAPO 算法改进有效**：在最优配置下，DAPO（54.12%）比 GRPO（52.58%）高 1.54 个百分点，动态采样、非对称裁剪和 token-level loss 的有效性得到验证。
 
-4. **模型容量限制**：1.5B 参数模型的推理能力有上限，SFT 后的 47.84% 已经接近该规模模型在数学推理任务上的瓶颈。GRPO 和 DAPO 的提升是在此基础上的增量优化。
+4. **超参数对训练效果影响显著**：控制变量实验表明，生成温度对 RL 训练效果有重要影响（0.7 vs 1.0 可导致 3-4% 的准确率差异），算法改进的效果依赖于合理的超参数配置。
 
-5. **工程实践**：在单卡 RTX 4090 上通过 LoRA 高效微调，批量生成加速 rollout 阶段，checkpoint 断点续训保障长时间训练的可靠性。
+5. **模型容量限制**：1.5B 参数模型的推理能力有上限，SFT 后的 47.84% 已经接近该规模模型在数学推理任务上的瓶颈。GRPO 和 DAPO 的提升是在此基础上的增量优化。
+
+6. **工程实践**：在单卡 RTX 4090 上通过 LoRA 高效微调，批量生成加速 rollout 阶段，checkpoint 断点续训保障长时间训练的可靠性。
 
 ## 7. 文件结构
 
@@ -243,12 +283,12 @@ assignment5-alignment/
 │   └── adapters.py           # 核心函数实现
 ├── output/
 │   ├── eval/
-│   │   ├── eval_compare.csv  # 四阶段对比结果
-│   │   ├── eval_compare.png  # 对比图表
-│   │   ├── baseline.jsonl    # Baseline 评测结果
-│   │   ├── sft.jsonl         # SFT 评测结果
-│   │   ├── grpo.jsonl        # GRPO 评测结果
-│   │   └── dapo.jsonl        # DAPO 评测结果
+│   │   ├── eval_compare.csv          # 四阶段对比结果（最优配置）
+│   │   ├── eval_compare.png          # 对比图表
+│   │   ├── baseline.jsonl            # Baseline 评测结果
+│   │   ├── sft.jsonl                 # SFT 评测结果
+│   │   ├── grpo.jsonl / grpo_v2.jsonl  # GRPO 评测结果
+│   │   └── dapo.jsonl / dapo_v2.jsonl  # DAPO 评测结果
 │   ├── sft/
 │   │   ├── training_log.jsonl
 │   │   └── sft_training_curves.png

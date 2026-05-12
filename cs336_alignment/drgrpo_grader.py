@@ -1049,10 +1049,10 @@ def r1_zero_reward_fn(response, ground_truth, fast=True):
 
 
 def r1_zero_additive_reward_fn(response, ground_truth, fast=True, max_length=4000):
-    """GRPO 加法奖励：reward = R_format + R_answer + R_length
-    R_format: +1 (有<answer>标签) / -1 (无标签)
-    R_answer: +1 (正确) / -1 (错误)
-    R_length: 0 (|y| <= max_length) / -1 (|y| > max_length)
+    """GRPO 加法奖励：reward = 1.0*R_format + 1.0*R_answer - 1.0*R_length
+    R_format: 1 (有<answer>标签) / 0 (无标签)
+    R_answer: 1 (正确) / 0 (错误)
+    R_length: 0 (正常长度) / 1 (超长)
     """
     # format reward
     if "<answer>" in response and "</answer>" in response:
@@ -1061,7 +1061,7 @@ def r1_zero_additive_reward_fn(response, ground_truth, fast=True, max_length=400
         if "\\boxed" in model_answer:
             model_answer = extract_answer(model_answer)
             if model_answer is None:
-                answer_reward = -1.0
+                answer_reward = 0.0
             else:
                 if isinstance(ground_truth, float) or isinstance(ground_truth, int):
                     ground_truth = str(ground_truth)
@@ -1071,7 +1071,7 @@ def r1_zero_additive_reward_fn(response, ground_truth, fast=True, max_length=400
                     is_correct = False
                     for gt in ground_truth:
                         is_correct |= grade(model_answer, gt, fast)
-                answer_reward = 1.0 if is_correct else -1.0
+                answer_reward = 1.0 if is_correct else 0.0
         else:
             if isinstance(ground_truth, float) or isinstance(ground_truth, int):
                 ground_truth = str(ground_truth)
@@ -1081,28 +1081,33 @@ def r1_zero_additive_reward_fn(response, ground_truth, fast=True, max_length=400
                 is_correct = False
                 for gt in ground_truth:
                     is_correct |= grade(model_answer, gt, fast)
-            answer_reward = 1.0 if is_correct else -1.0
+            answer_reward = 1.0 if is_correct else 0.0
     else:
-        format_reward = -1.0
-        answer_reward = -1.0
+        format_reward = 0.0
+        answer_reward = 0.0
 
-    # length reward
-    length_reward = 0.0 if len(response) <= max_length else -1.0
+    # length penalty
+    length_flag = 1.0 if len(response) > max_length else 0.0
+
+    # final reward: format, answer, length equal weights (1:1:1)
+    reward = 1.0 * format_reward + 1.0 * answer_reward - 1.0 * length_flag
 
     return {
         "format_reward": format_reward,
         "answer_reward": answer_reward,
-        "reward": format_reward + answer_reward + length_reward,
+        "length_flag": length_flag,
+        "reward": reward,
     }
 
 
+
 def dapo_reward_fn(response, ground_truth, fast=True, max_length=4000, cache_length=500):
-    """DAPO 奖励：reward = R_format + R_answer + R_length
-    R_format: +1 (有<answer>标签) / -1 (无标签) — 和 GRPO 一致
-    R_answer: +1 (正确) / -1 (错误) — 和 GRPO 一致
+    """DAPO 奖励：reward = 1.0*R_format + 1.0*R_answer - 1.0*R_length(soft)
+    R_format: 1 (有<answer>标签) / 0 (无标签)
+    R_answer: 1 (正确) / 0 (错误)
     R_length: 0 (|y| <= Lmax - Lcache)
               ((Lmax - Lcache) - |y|) / Lcache (Lmax - Lcache < |y| <= Lmax)
-              -1 (|y| > Lmax)
+              -1.0 (|y| > Lmax) — soft penalty
     """
     # format reward
     if "<answer>" in response and "</answer>" in response:
@@ -1111,7 +1116,7 @@ def dapo_reward_fn(response, ground_truth, fast=True, max_length=4000, cache_len
         if "\\boxed" in model_answer:
             model_answer = extract_answer(model_answer)
             if model_answer is None:
-                answer_reward = -1.0
+                answer_reward = 0.0
             else:
                 if isinstance(ground_truth, float) or isinstance(ground_truth, int):
                     ground_truth = str(ground_truth)
@@ -1121,7 +1126,7 @@ def dapo_reward_fn(response, ground_truth, fast=True, max_length=4000, cache_len
                     is_correct = False
                     for gt in ground_truth:
                         is_correct |= grade(model_answer, gt, fast)
-                answer_reward = 1.0 if is_correct else -1.0
+                answer_reward = 1.0 if is_correct else 0.0
         else:
             if isinstance(ground_truth, float) or isinstance(ground_truth, int):
                 ground_truth = str(ground_truth)
@@ -1131,18 +1136,18 @@ def dapo_reward_fn(response, ground_truth, fast=True, max_length=4000, cache_len
                 is_correct = False
                 for gt in ground_truth:
                     is_correct |= grade(model_answer, gt, fast)
-            answer_reward = 1.0 if is_correct else -1.0
+            answer_reward = 1.0 if is_correct else 0.0
     else:
-        format_reward = -1.0
-        answer_reward = -1.0
+        format_reward = 0.0
+        answer_reward = 0.0
 
-    # length reward (DAPO 软惩罚)
+    # length reward (DAPO soft penalty with weight 1.0)
     response_len = len(response)
     l_threshold = max_length - cache_length
     if response_len <= l_threshold:
         length_reward = 0.0
     elif response_len <= max_length:
-        length_reward = (l_threshold - response_len) / cache_length
+        length_reward = 1.0 * (l_threshold - response_len) / cache_length
     else:
         length_reward = -1.0
 
