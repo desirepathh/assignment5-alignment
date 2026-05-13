@@ -185,11 +185,60 @@ def plot_grpo_curves(log_path: str, output_dir: str):
     # x-axis label on last subplot
     axes[idx - 1].set_xlabel("Iteration")
 
+    # x-axis label on last subplot
+    axes[idx - 1].set_xlabel("Iteration")
+
     plt.tight_layout()
     fig_path = os.path.join(output_dir, "grpo_training_curves.png")
     plt.savefig(fig_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Training curves saved to {fig_path}")
+
+    # 独立 eval 图
+    plot_grpo_eval_curves(log_path, output_dir)
+
+
+def plot_grpo_eval_curves(log_path: str, output_dir: str):
+    """绘制 GRPO 评估曲线（accuracy, format rate, reward, response length）。"""
+    records = load_metrics(log_path)
+    eval_records = [r for r in records if "eval_accuracy" in r]
+    if not eval_records:
+        return
+
+    iters = [r["iteration"] for r in eval_records]
+    acc = [r["eval_accuracy"] for r in eval_records]
+    fmt = [r["eval_format_rate"] for r in eval_records]
+    reward = [r["eval_mean_reward"] for r in eval_records]
+    resp_len = [r.get("eval_mean_response_len", 0) for r in eval_records]
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+    # Accuracy + Format Rate
+    ax1 = axes[0]
+    ax1.plot(iters, acc, color="#C44E52", marker="o", markersize=4, linewidth=1.5, label="Accuracy")
+    ax1.plot(iters, fmt, color="#4C72B0", marker="s", markersize=4, linewidth=1, linestyle="--", label="Format Rate")
+    ax1.set_ylabel("Rate")
+    ax1.set_title("GRPO Evaluation (val set)")
+    ax1.set_ylim(0, 1)
+    ax1.legend(loc="lower right", fontsize=9)
+    ax1.grid(alpha=0.3)
+
+    # Reward + Response Length
+    ax2 = axes[1]
+    ax2b = ax2.twinx()
+    l1, = ax2.plot(iters, reward, color="#55A868", marker="o", markersize=4, linewidth=1.5, label="Mean Reward")
+    l2, = ax2b.plot(iters, resp_len, color="#DDAA33", marker="s", markersize=4, linewidth=1, linestyle="--", label="Response Length")
+    ax2.set_xlabel("Iteration")
+    ax2.set_ylabel("Reward", color="#55A868")
+    ax2b.set_ylabel("Response Length (chars)", color="#DDAA33")
+    ax2.legend(handles=[l1, l2], loc="upper left", fontsize=9)
+    ax2.grid(alpha=0.3)
+
+    plt.tight_layout()
+    fig_path = os.path.join(output_dir, "grpo_eval_curves.png")
+    plt.savefig(fig_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Eval curves saved to {fig_path}")
 
 
 def plot_dapo_curves(log_path: str, output_dir: str):
