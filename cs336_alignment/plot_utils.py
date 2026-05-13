@@ -94,9 +94,12 @@ def plot_sft_curves(log_path: str, output_dir: str):
 
 def plot_grpo_curves(log_path: str, output_dir: str):
     """绘制 GRPO 训练曲线：loss, reward + reward breakdown, clip fraction, gradient norm。"""
-    records = load_metrics(log_path)
-    if not records:
+    all_records = load_metrics(log_path)
+    if not all_records:
         return
+
+    # 分离训练记录和 eval 记录
+    records = [r for r in all_records if "loss" in r]
 
     iters = [r["iteration"] for r in records]
     has_grad_norm = any("grad_norm" in r for r in records)
