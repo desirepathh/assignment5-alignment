@@ -284,6 +284,8 @@ def main():
         model.train()
 
         # 5. 策略更新（可重复多步）
+        entropy_sum = 0.0
+        entropy_count = 0
         for update_step in range(args.num_update_steps_per_rollout):
             perm = torch.randperm(len(rollout_prompts))
             optimizer.zero_grad()
@@ -298,8 +300,9 @@ def main():
                 labels = tokenized["labels"].to(device)
                 response_mask = tokenized["response_mask"].to(device)
 
-                result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=False)
+                result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=True)
                 policy_log_probs = result["log_probs"]
+                token_entropy = result["token_entropy"]
                 batch_old_log_probs = old_log_probs[batch_idx].to(device)
                 batch_ref_log_probs = ref_log_probs[batch_idx].to(device)
 
@@ -311,6 +314,7 @@ def main():
                 if cur_len < max_batch_len:
                     policy_log_probs = torch.nn.functional.pad(policy_log_probs, (0, max_batch_len - cur_len))
                     response_mask = torch.nn.functional.pad(response_mask, (0, max_batch_len - cur_len))
+                    token_entropy = torch.nn.functional.pad(token_entropy, (0, max_batch_len - cur_len))
                 if old_len < max_batch_len:
                     batch_old_log_probs = torch.nn.functional.pad(batch_old_log_probs, (0, max_batch_len - old_len))
                 elif old_len > max_batch_len:
@@ -339,11 +343,16 @@ def main():
 
                 (loss + kl_loss).backward()
 
+                # 累积所有 microbatch 的熵
+                entropy_sum += (token_entropy * response_mask).sum().item()
+                entropy_count += response_mask.sum().item()
+
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             optimizer.zero_grad()
 
         # logging
+        mean_entropy = entropy_sum / max(entropy_count, 1)
         if (iteration + 1) % args.log_every == 0:
             clip_frac = metadata.get("clip_fraction", 0)
             if isinstance(clip_frac, torch.Tensor):
@@ -362,6 +371,7 @@ def main():
                 "mean_answer_reward": mean_answer_reward,
                 "clip_fraction": clip_frac,
                 "grad_norm": grad_norm.item(),
+                "mean_entropy": mean_entropy,
             })
 
         # save checkpoint
