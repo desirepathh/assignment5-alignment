@@ -100,8 +100,16 @@ def plot_grpo_curves(log_path: str, output_dir: str):
 
     iters = [r["iteration"] for r in records]
     has_grad_norm = any("grad_norm" in r for r in records)
+    has_entropy = any("mean_entropy" in r for r in records)
+    has_response_len = any("mean_response_len" in r for r in records)
 
-    nrows = 4 if has_grad_norm else 3
+    nrows = 4
+    if has_grad_norm:
+        nrows += 1
+    if has_entropy:
+        nrows += 1
+    if has_response_len:
+        nrows += 1
     fig, axes = plt.subplots(nrows, 1, figsize=(10, 4 * nrows), sharex=True)
 
     # 1. Loss
@@ -144,14 +152,38 @@ def plot_grpo_curves(log_path: str, output_dir: str):
     ax3.grid(alpha=0.3)
 
     # 4. Gradient Norm
+    idx = 3
     if has_grad_norm:
-        ax4 = axes[3]
+        ax = axes[idx]
         grad_norms = [r.get("grad_norm", 0) for r in records]
-        ax4.plot(iters, grad_norms, color="#888888", linewidth=1)
-        ax4.set_xlabel("Iteration")
-        ax4.set_ylabel("Gradient Norm")
-        ax4.set_title("GRPO Gradient Norm")
-        ax4.grid(alpha=0.3)
+        ax.plot(iters, grad_norms, color="#888888", linewidth=1)
+        ax.set_ylabel("Gradient Norm")
+        ax.set_title("GRPO Gradient Norm")
+        ax.grid(alpha=0.3)
+        idx += 1
+
+    # 5. Entropy
+    if has_entropy:
+        ax = axes[idx]
+        entropies = [r.get("mean_entropy", 0) for r in records]
+        ax.plot(iters, entropies, color="#C44E52", linewidth=1)
+        ax.set_ylabel("Mean Token Entropy")
+        ax.set_title("GRPO Policy Entropy (per-token)")
+        ax.grid(alpha=0.3)
+        idx += 1
+
+    # 6. Response Length
+    if has_response_len:
+        ax = axes[idx]
+        resp_lens = [r.get("mean_response_len", 0) for r in records]
+        ax.plot(iters, resp_lens, color="#4C72B0", linewidth=1)
+        ax.set_ylabel("Mean Response Length")
+        ax.set_title("GRPO Mean Response Length (chars)")
+        ax.grid(alpha=0.3)
+        idx += 1
+
+    # x-axis label on last subplot
+    axes[idx - 1].set_xlabel("Iteration")
 
     plt.tight_layout()
     fig_path = os.path.join(output_dir, "grpo_training_curves.png")
