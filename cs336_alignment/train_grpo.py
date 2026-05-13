@@ -252,6 +252,7 @@ def main():
         reward_details = [reward_fn(r, gt) for r, gt in zip(rollout_responses, repeated_ground_truths)]
         mean_format_reward = sum(d["format_reward"] for d in reward_details) / len(reward_details)
         mean_answer_reward = sum(d["answer_reward"] for d in reward_details) / len(reward_details)
+        mean_response_len = sum(len(r) for r in rollout_responses) / len(rollout_responses)
 
         print(f"Mean reward: {mean_reward:.4f} | Std: {std_reward:.4f} | "
               f"Format: {mean_format_reward:.2%} | Answer: {mean_answer_reward:.2%}")
@@ -372,6 +373,7 @@ def main():
                 "clip_fraction": clip_frac,
                 "grad_norm": grad_norm.item(),
                 "mean_entropy": mean_entropy,
+                "mean_response_len": mean_response_len,
             })
 
         # save checkpoint
