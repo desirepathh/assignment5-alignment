@@ -388,6 +388,7 @@ def main():
         mean_advantage = advantages.mean().item()
         mean_format_reward = sum(d["format_reward"] for d in reward_details_all) / len(reward_details_all)
         mean_answer_reward = sum(d["answer_reward"] for d in reward_details_all) / len(reward_details_all)
+        mean_response_len = sum(len(r) for r in rollout_responses) / len(rollout_responses)
         n_filtered = valid_n - n_valid
         print(f"Mean reward: {mean_reward:.4f} | Std: {std_reward:.4f} | "
               f"Format: {mean_format_reward:.2%} | Answer: {mean_answer_reward:.2%} | "
@@ -416,6 +417,8 @@ def main():
         model.train()
 
         # 5. Policy update with DAPO asymmetric clip + token-level loss
+        entropy_sum = 0.0
+        entropy_count = 0
         for update_step in range(args.num_update_steps_per_rollout):
             perm = torch.randperm(len(filtered_prompts))
             optimizer.zero_grad()
@@ -430,8 +433,9 @@ def main():
                 labels = tokenized["labels"].to(device)
                 response_mask = tokenized["response_mask"].to(device)
 
-                result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=False)
+                result = run_get_response_log_probs(model, input_ids, labels, return_token_entropy=True)
                 policy_log_probs = result["log_probs"]
+                token_entropy = result["token_entropy"]
                 batch_old_log_probs = old_log_probs[batch_idx].to(device)
 
                 # Align sequence lengths
@@ -453,11 +457,16 @@ def main():
                 )
                 loss.backward()
 
+                # 累积熵
+                entropy_sum += (token_entropy * response_mask).sum().item()
+                entropy_count += response_mask.sum().item()
+
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             optimizer.zero_grad()
 
         # Logging
+        mean_entropy = entropy_sum / max(entropy_count, 1)
         if (iteration + 1) % args.log_every == 0:
             clip_frac = metadata.get("clip_fraction", 0)
             if isinstance(clip_frac, torch.Tensor):
@@ -475,6 +484,8 @@ def main():
                 "clip_fraction": clip_frac,
                 "grad_norm": grad_norm.item(),
                 "n_filtered": n_filtered,
+                "mean_entropy": mean_entropy,
+                "mean_response_len": mean_response_len,
             })
 
         # Save checkpoint (model + optimizer + iteration)
