@@ -73,7 +73,7 @@ def parse_args():
                         help="Evaluate on val set every N iterations (0 to disable)")
     parser.add_argument("--eval_data_path", type=str, default=None,
                         help="Path to validation data for periodic evaluation")
-    parser.add_argument("--eval_n_samples", type=int, default=32,
+    parser.add_argument("--eval_n_samples", type=int, default=128,
                         help="Number of samples to evaluate each time")
     parser.add_argument("--kl_coef", type=float, default=0.01,
                         help="KL divergence coefficient (beta in GRPO paper)")
@@ -142,7 +142,9 @@ def evaluate(model, tokenizer, eval_problems, reward_fn, n_samples, args, device
     """从验证集采样评估，返回 eval 指标。"""
     model.eval()
     n = min(n_samples, len(eval_problems))
-    indices = torch.randperm(len(eval_problems))[:n].tolist()
+    rng = torch.Generator()
+    rng.manual_seed(42)
+    indices = torch.randperm(len(eval_problems), generator=rng)[:n].tolist()
     sampled = [eval_problems[i] for i in indices]
 
     prompts = [R1_ZERO_PROMPT.format(question=p["problem"]) for p in sampled]

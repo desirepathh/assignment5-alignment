@@ -83,7 +83,7 @@ def parse_args():
                         help="Evaluate on val set every N iterations (0 to disable)")
     parser.add_argument("--eval_data_path", type=str, default=None,
                         help="Path to validation data for periodic evaluation")
-    parser.add_argument("--eval_n_samples", type=int, default=16,
+    parser.add_argument("--eval_n_samples", type=int, default=128,
                         help="Number of samples to evaluate each time")
     return parser.parse_args()
 
@@ -146,7 +146,9 @@ def evaluate(model, tokenizer, eval_problems, reward_fn, n_samples, args, device
     """从验证集采样评估。"""
     model.eval()
     n = min(n_samples, len(eval_problems))
-    indices = torch.randperm(len(eval_problems))[:n].tolist()
+    rng = torch.Generator()
+    rng.manual_seed(42)
+    indices = torch.randperm(len(eval_problems), generator=rng)[:n].tolist()
     sampled = [eval_problems[i] for i in indices]
 
     prompts = [R1_ZERO_PROMPT.format(question=p["problem"]) for p in sampled]
