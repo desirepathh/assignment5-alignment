@@ -69,6 +69,12 @@ def parse_args():
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--save_every", type=int, default=50)
     parser.add_argument("--log_every", type=int, default=1)
+    parser.add_argument("--eval_every", type=int, default=10,
+                        help="Evaluate on val set every N iterations (0 to disable)")
+    parser.add_argument("--eval_data_path", type=str, default=None,
+                        help="Path to validation data for periodic evaluation")
+    parser.add_argument("--eval_n_samples", type=int, default=32,
+                        help="Number of samples to evaluate each time")
     parser.add_argument("--kl_coef", type=float, default=0.01,
                         help="KL divergence coefficient (beta in GRPO paper)")
     parser.add_argument("--ref_model_name", type=str, default=None,
@@ -132,6 +138,51 @@ def generate_rollouts(model, tokenizer, prompts, group_size, max_length, tempera
     return all_prompts, all_responses
 
 
+def evaluate(model, tokenizer, eval_problems, reward_fn, n_samples, args, device):
+    """从验证集采样评估，返回 eval 指标。"""
+    model.eval()
+    n = min(n_samples, len(eval_problems))
+    indices = torch.randperm(len(eval_problems))[:n].tolist()
+    sampled = [eval_problems[i] for i in indices]
+
+    prompts = [R1_ZERO_PROMPT.format(question=p["problem"]) for p in sampled]
+    ground_truths = [str(p["expected_answer"]) for p in sampled]
+
+    # 每个 prompt 只生成 1 个回复（不需要 group）
+    with torch.no_grad():
+        tokenizer.padding_side = "left"
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=args.max_response_length,
+            temperature=args.generation_temperature,
+            top_p=args.generation_top_p,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        prompt_lens = inputs["attention_mask"].sum(dim=1).tolist()
+        responses = []
+        for i in range(n):
+            generated_ids = outputs[i, prompt_lens[i]:]
+            responses.append(tokenizer.decode(generated_ids, skip_special_tokens=True))
+
+    # 计算 reward
+    reward_details = [reward_fn(r, gt) for r, gt in zip(responses, ground_truths)]
+    eval_accuracy = sum(d["answer_reward"] for d in reward_details) / len(reward_details)
+    eval_format_rate = sum(d["format_reward"] for d in reward_details) / len(reward_details)
+    eval_mean_reward = sum(d["reward"] for d in reward_details) / len(reward_details)
+    eval_mean_response_len = sum(len(r) for r in responses) / len(responses)
+
+    model.train()
+    return {
+        "eval_accuracy": eval_accuracy,
+        "eval_format_rate": eval_format_rate,
+        "eval_mean_reward": eval_mean_reward,
+        "eval_mean_response_len": eval_mean_response_len,
+        "eval_n_samples": n,
+    }
+
+
 def main():
     args = parse_args()
     torch.manual_seed(args.seed)
@@ -169,6 +220,14 @@ def main():
     # 加载数据
     problems = load_problems(args.data_path)
     print(f"Loaded {len(problems)} problems")
+
+    # 加载验证集
+    eval_problems = None
+    if args.eval_every > 0 and args.eval_data_path:
+        eval_problems = load_problems(args.eval_data_path)
+        print(f"Loaded {len(eval_problems)} eval problems (evaluate every {args.eval_every} iterations)")
+    elif args.eval_every > 0:
+        print("Warning: --eval_every set but no --eval_data_path, periodic eval disabled")
 
     # 选择奖励函数
     reward_fn = r1_zero_additive_reward_fn if args.reward_fn == "additive" else r1_zero_reward_fn
@@ -385,6 +444,21 @@ def main():
             with open(os.path.join(save_path, "iteration.txt"), "w") as f:
                 f.write(str(iteration + 1))
             print(f"Saved checkpoint to {save_path}")
+
+        # periodic evaluation
+        if eval_problems is not None and (iteration + 1) % args.eval_every == 0:
+            eval_metrics = evaluate(
+                model, tokenizer, eval_problems, reward_fn,
+                args.eval_n_samples, args, device,
+            )
+            print(f"[Eval] Accuracy: {eval_metrics['eval_accuracy']:.2%} | "
+                  f"Format: {eval_metrics['eval_format_rate']:.2%} | "
+                  f"Reward: {eval_metrics['eval_mean_reward']:.4f} | "
+                  f"RespLen: {eval_metrics['eval_mean_response_len']:.0f}")
+            logger.log({
+                "iteration": iteration + 1,
+                **eval_metrics,
+            })
 
     # 保存最终模型
     save_path = os.path.join(args.output_dir, "final")
